@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>State Mirror Demo</title>
+</head>
+<body>
+    <h1>State Mirror Demo</h1>
+    
+	<div id="debug">Current window.state1: </div>
+    <reactive-element is-loading="true" data-source="window.state1"></reactive-element>
+
+	<div id="debug">Current window.state2: </div>
+    <reactive-element is-loading="true" data-source="window.state2"></reactive-element>    
+
+	<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+	<canvas id="myChart" width="400" height="400"></canvas>
+	
+	<script>
+    // Fetch the canvas element
+    var ctx = document.getElementById('myChart').getContext('2d');
+
+    // Initial data (empty array for now)
+    var data = {
+      datasets: [{
+        label: 'XY Coordinates',
+        data: [], // Start with an empty dataset
+        borderColor: 'rgba(75, 192, 192, 1)',
+        backgroundColor: 'rgba(75, 192, 192, 0.2)',
+        pointRadius: 5,
+        pointBackgroundColor: 'rgba(75, 192, 192, 1)',
+        borderWidth: 1
+      }]
+    };
+
+    // Chart configuration
+    var config = {
+      type: 'scatter', // Use a scatter plot for XY coordinates
+      data: data,
+      options: {
+        scales: {
+          x: {
+            min: 0, // Min X value
+            max: 100, // Max X value
+            title: {
+              display: true,
+              text: 'X Axis (0 - 100)'
+            }
+          },
+          y: {
+            min: 0, // Min Y value
+            max: 100, // Max Y value
+            title: {
+              display: true,
+              text: 'Y Axis (0 - 100)'
+            }
+          }
+        },
+        responsive: true
+      }
+    };
+
+    // Create the chart instance
+    var myChart = new Chart(ctx, config);
+
+    // Function to add a point to the chart
+    function addCoordinate(x, y) {
+      // Add the new data point to the dataset
+      myChart.data.datasets[0].data.push({ x: x, y: y });
+
+      // Update the chart to render the new point
+      myChart.update();
+    }
+	</script>
+
+    <script>
+        // Initialize window.state1
+        window.state1 = null;
+
+        // Connect to SSE stream
+        const eventSource = new EventSource('/stream');
+        eventSource.onmessage = (event) => {
+            try {
+                const stateUpdate = JSON.parse(event.data);
+                
+                // Apply each key-value pair to the window object
+                Object.entries(stateUpdate).forEach(([key, value]) => {
+                    window[key] = value;
+					addCoordinate(window.state1, 50);
+                    console.log(`Updated ${key}:`, value);
+                });
+                
+            } catch (error) {
+                console.error('Error processing message:', error);
+                console.error('Raw data:', event.data);
+            }
+        };
+    </script>
+<script>
+class ReactiveElement extends HTMLElement {
+    static get observedAttributes() {
+        return ['is-loading', 'data-source'];
+    }
+
+    constructor() {
+        super();
+        this.attachShadow({ mode: 'open' });
+
+        // Default values
+        this.isLoading = true;
+        this.dataSource = 'window.state';
+
+        // Initial render
+        this.render();
+
+        // Set up the observer for the data source
+        this.setupDataSourceObserver();
+    }
+
+    getCurrentValue() {
+        const path = this.dataSource.split('.');
+        let value = window;
+        for (const key of path) {
+            value = value[key];
+        }
+        return value;
+    }
+
+    setupDataSourceObserver() {
+        const path = this.dataSource.split('.');
+        let target = window;
+        const finalKey = path[path.length - 1];
+
+        for (let i = 0; i < path.length - 1; i++) {
+            target = target[path[i]];
+        }
+
+        let _value = this.getCurrentValue();
+        Object.defineProperty(target, finalKey, {
+            get: function () {
+                console.log(`Getting ${finalKey} value:`, _value);
+                return _value;
+            },
+            set: function (newValue) {
+                console.log(`Setting ${finalKey} value to:`, newValue);
+                _value = newValue;
+                document.querySelectorAll('reactive-element')
+                    .forEach(el => {
+                        if (el.dataSource === this.dataSource) {
+                            el.updateState(newValue);
+                        }
+                    });
+            }.bind(this),
+            configurable: true
+        });
+    }
+
+    attributeChangedCallback(name, oldValue, newValue) {
+        if (name === 'is-loading') {
+            this.isLoading = newValue !== 'false';
+            this.render();
+        } else if (name === 'data-source') {
+            this.dataSource = newValue;
+            this.setupDataSourceObserver();
+            this.render();
+        }
+    }
+
+    updateState(newValue) {
+        if (newValue === undefined || newValue === null) {
+            this.isLoading = true;
+            this.setAttribute('is-loading', 'true');
+        } else {
+            this.isLoading = false;
+            this.setAttribute('is-loading', 'false');
+        }
+        this.render();
+    }
+
+    render() {
+        const currentValue = this.getCurrentValue();
+        this.shadowRoot.innerHTML = `
+            <style>
+                .state-value {
+                    color: green;
+                    font-weight: bold;
+                }
+
+                @keyframes spin {
+                    0% { transform: rotate(0deg); }
+                    100% { transform: rotate(360deg); }
+                }
+
+                .loader {
+                    width: 20px;
+                    height: 20px;
+                    border: 3px solid #f3f3f3;
+                    border-top: 3px solid #3498db;
+                    border-radius: 50%;
+                    display: inline-block;
+                    animation: spin 1s linear infinite;
+                    vertical-align: middle;
+                    margin-right: 10px;
+                }
+
+                .state-display {
+                    display: flex;
+                    align-items: center;
+                    gap: 8px;
+                }
+            </style>
+
+            <div class="state-display">
+                ${this.isLoading
+                    ? '<div class="loader"></div>'
+                    : `<span class="state-value">${currentValue || ''}</span>`
+                }
+            </div>
+        `;
+    }
+}
+
+// Define the custom element
+customElements.define('reactive-element', ReactiveElement);
+</script>
+
+</body>
+</html>
